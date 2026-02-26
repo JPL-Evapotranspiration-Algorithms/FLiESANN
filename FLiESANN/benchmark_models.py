@@ -63,13 +63,19 @@ def benchmark_model(model_path, input_df, model_name="Model"):
     # Warm-up run (to load model and compile TensorFlow graph)
     print(f"   Warming up...")
     warmup_df = input_df.head(10)
-    _ = process_FLiESANN_table(warmup_df, offline_mode=True, model_filename=model_path)
+    if model_path is not None:
+        _ = process_FLiESANN_table(warmup_df, offline_mode=True, model_filename=model_path)
+    else:
+        _ = process_FLiESANN_table(warmup_df, offline_mode=True)
     
     # Actual benchmark
     print(f"   Running benchmark on {len(input_df):,} samples...")
     
     start_time = time.time()
-    output_df = process_FLiESANN_table(input_df, offline_mode=True, model_filename=model_path)
+    if model_path is not None:
+        output_df = process_FLiESANN_table(input_df, offline_mode=True, model_filename=model_path)
+    else:
+        output_df = process_FLiESANN_table(input_df, offline_mode=True)
     end_time = time.time()
     
     elapsed = end_time - start_time

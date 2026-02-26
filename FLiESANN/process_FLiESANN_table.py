@@ -10,6 +10,7 @@ from shapely.geometry import Point
 from GEOS5FP import GEOS5FP
 from NASADEM import NASADEMConnection
 from .process_FLiESANN import FLiESANN
+from .constants import MODEL_FILENAME
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ def process_FLiESANN_table(
         GEOS5FP_connection: GEOS5FP = None,
         NASADEM_connection: NASADEMConnection = None,
         offline_mode: bool = False,
-        model_filename: str = None) -> DataFrame:
+        model_filename: str = MODEL_FILENAME) -> DataFrame:
     """
     Processes a DataFrame of FLiES inputs and returns a DataFrame with FLiES outputs.
     

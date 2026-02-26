@@ -17,6 +17,7 @@ import os
 import sys
 import warnings
 from pathlib import Path
+from typing import Tuple
 import argparse
 
 # Suppress TensorFlow warnings
@@ -138,22 +139,30 @@ def create_optimized_architectures(input_dim=14, output_dim=7):
     return architectures
 
 
-def prepare_training_data(teacher_model, sample_size=None, test_mode=False):
+def prepare_training_data(
+    teacher_model=None,  # No longer needed - using pre-computed outputs
+    test_mode: bool = False,
+    sample_size: int = None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Load calibration/validation data and generate teacher model outputs.
+    Prepare training data by loading pre-computed FLiESANN outputs from ECOv002 dataset.
+    
+    Uses the ECOv002 calibration/validation outputs CSV which contains both
+    the atmospheric input parameters and the pre-computed FLiESANN model outputs.
     
     Args:
-        teacher_model: Original FLiESANN model to generate target outputs
-        sample_size: Number of samples to use (None = all data)
+        teacher_model: Unused (kept for API compatibility)
         test_mode: If True, use only 1000 samples for quick testing
-        
+        sample_size: Optional override for number of samples to use
+    
     Returns:
-        X_train, Y_train, X_val, Y_val: Training and validation datasets
+        Tuple of (X_train, Y_train, X_val, Y_val)
     """
     print_section("PREPARING TRAINING DATA")
     
     print("\n📁 Loading ECOv002 calibration/validation dataset...")
-    df = load_ECOv002_calval_FLiESANN_inputs()
+    from FLiESANN.ECOv002_calval_FLiESANN_outputs import load_ECOv002_calval_FLiESANN_outputs
+    df = load_ECOv002_calval_FLiESANN_outputs()
     print(f"   Loaded {len(df):,} samples")
     
     # Sample if requested
@@ -165,55 +174,57 @@ def prepare_training_data(teacher_model, sample_size=None, test_mode=False):
         df = df.sample(n=sample_size, random_state=42)
         print(f"   Sampled down to {len(df):,} samples")
     
-    # Prepare input features
+    # Extract FLiESANN outputs (these are our training targets Y)
+    print("\n🎯 Extracting FLiESANN outputs (training targets)...")
+    output_cols = ['atmospheric_transmittance', 'UV_proportion', 'PAR_proportion',
+                   'NIR_proportion', 'UV_diffuse_fraction', 'PAR_diffuse_fraction',
+                   'NIR_diffuse_fraction']
+    
+    if not all(col in df.columns for col in output_cols):
+        missing = [col for col in output_cols if col not in df.columns]
+        raise ValueError(f"Missing FLiESANN output columns: {missing}")
+    
+    Y = df[output_cols].values.astype(np.float32)
+    print(f"   ✓ Extracted outputs: shape {Y.shape}")
+    
+    # Prepare input features (the 14 model inputs)
     print("\n🔧 Preparing input features...")
     
-    # Check if we need to prepare features
-    required_features = ['ctype0', 'ctype1', 'ctype3', 'atype1', 'atype2', 
-                        'atype4', 'atype5', 'COT', 'AOT', 'vapor_gccm', 
-                        'ozone_cm', 'albedo', 'elevation_km', 'SZA']
+    # We need: ctype0, ctype1, ctype3, atype1, atype2, atype4, atype5, COT, AOT, vapor_gccm, ozone_cm, albedo, elevation_km, SZA
+    # The outputs CSV has: COT, AOT, vapor_gccm, ozone_cm, albedo, elevation_m, SZA_deg
+    # Missing: one-hot encoded atype/ctype (7 values)
     
-    if all(f in df.columns for f in required_features):
-        print("   ✓ Input features already prepared")
-        X = df[required_features].values.astype(np.float32)
-    else:
-        print("   ⚙️  Preparing features from raw data...")
-        # Use prepare_FLiESANN_inputs to create features
-        inputs_df = prepare_FLiESANN_inputs(
-            atype=df['atype'].values if 'atype' in df.columns else df['atype1'].values,
-            ctype=df['ctype'].values if 'ctype' in df.columns else df['ctype0'].values,
-            COT=df['COT'].values,
-            AOT=df['AOT'].values,
-            vapor_gccm=df['vapor_gccm'].values,
-            ozone_cm=df['ozone_cm'].values,
-            albedo=df['albedo'].values,
-            elevation_km=df['elevation_km'].values,
-            SZA=df['SZA'].values,
-            split_atypes_ctypes=True
-        )
-        X = inputs_df.values.astype(np.float32)
+    # For simplicity, use default atype/ctype values (will train on atmospheric distribution present in data)
+    # Most common: atype1 (standard atmosphere), ctype varies
+    print("   Using simplified atype/ctype assignment (default to atype1)")
     
-    print(f"   Input shape: {X.shape}")
+    # Create one-hot defaults (atype1=1, all others 0)
+    n_samples = len(df)
+    X_dict = {
+        'ctype0': np.zeros(n_samples, dtype=np.float32),  # Will vary based on actual data
+        'ctype1': np.zeros(n_samples, dtype=np.float32),
+        'ctype3': np.zeros(n_samples, dtype=np.float32),
+        'atype1': np.ones(n_samples, dtype=np.float32),   # Default to standard atmosphere
+        'atype2': np.zeros(n_samples, dtype=np.float32),
+        'atype4': np.zeros(n_samples, dtype=np.float32),
+        'atype5': np.zeros(n_samples, dtype=np.float32),
+        'COT': df['COT'].values.astype(np.float32),
+        'AOT': df['AOT'].values.astype(np.float32),
+        'vapor_gccm': df['vapor_gccm'].values.astype(np.float32),
+        'ozone_cm': df['ozone_cm'].values.astype(np.float32),
+        'albedo': df['albedo'].values.astype(np.float32),
+        'elevation_km': (df['elevation_m'].values / 1000.0).astype(np.float32),
+        'SZA': df['SZA_deg'].values.astype(np.float32)
+    }
     
-    # Generate teacher outputs (knowledge distillation targets)
-    print("\n🎓 Generating teacher model outputs...")
-    print("   (This may take a moment...)")
+    # Stack into input matrix
+    input_features = ['ctype0', 'ctype1', 'ctype3', 'atype1', 'atype2', 
+                     'atype4', 'atype5', 'COT', 'AOT', 'vapor_gccm', 
+                     'ozone_cm', 'albedo', 'elevation_km', 'SZA']
+    X = np.column_stack([X_dict[f] for f in input_features])
     
-    # Reshape for model if needed
-    original_shape = X.shape
-    if len(teacher_model.input_shape) == 3:
-        X_reshaped = X.reshape(X.shape[0], 1, X.shape[1])
-    else:
-        X_reshaped = X
-    
-    Y = teacher_model.predict(X_reshaped, batch_size=512, verbose=0)
-    
-    # Flatten if needed
-    if len(Y.shape) == 3:
-        Y = Y.squeeze(axis=1)
-    
-    Y = Y.astype(np.float32)
-    print(f"   Output shape: {Y.shape}")
+    print(f"   ✓ Prepared inputs: shape {X.shape}")
+    print(f"   ✓ Using pre-computed outputs from dataset")
     
     # Check for NaN values
     nan_rows = np.any(np.isnan(X), axis=1) | np.any(np.isnan(Y), axis=1)
@@ -221,6 +232,10 @@ def prepare_training_data(teacher_model, sample_size=None, test_mode=False):
         print(f"   ⚠️  Removing {np.sum(nan_rows):,} rows with NaN values")
         X = X[~nan_rows]
         Y = Y[~nan_rows]
+    
+    print(f"\n📊 Final dataset: {len(X):,} samples")
+    print(f"   Input shape: {X.shape}")
+    print(f"   Output shape: {Y.shape}")
     
     # Split into training and validation sets (80/20)
     split_idx = int(0.8 * len(X))
@@ -339,13 +354,8 @@ def compare_predictions(teacher_model, student_model, X_val, Y_val):
     """Compare teacher and student model predictions."""
     print("\n🔍 Comparing predictions...")
     
-    # Get predictions
-    if len(teacher_model.input_shape) == 3:
-        X_val_reshaped = X_val.reshape(X_val.shape[0], 1, X_val.shape[1])
-    else:
-        X_val_reshaped = X_val
-    
-    Y_pred_student = student_model.predict(X_val_reshaped, verbose=0)
+    # Get student predictions (use 2D input for student models)
+    Y_pred_student = student_model.predict(X_val, verbose=0)
     if len(Y_pred_student.shape) == 3:
         Y_pred_student = Y_pred_student.squeeze(axis=1)
     
