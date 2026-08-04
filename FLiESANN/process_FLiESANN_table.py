@@ -9,6 +9,8 @@ from rasters import MultiPoint, WGS84
 from shapely.geometry import Point
 from GEOS5FP import GEOS5FP
 from NASADEM import NASADEMConnection
+
+from .constants import *
 from .process_FLiESANN import FLiESANN
 
 logger = logging.getLogger(__name__)
@@ -17,7 +19,8 @@ def process_FLiESANN_table(
         input_df: DataFrame,
         GEOS5FP_connection: GEOS5FP = None,
         NASADEM_connection: NASADEMConnection = None,
-        offline_mode: bool = False) -> DataFrame:
+        offline_mode: bool = False,
+        model_filename: str = MODEL_FILENAME) -> DataFrame:
     """
     Processes a DataFrame of FLiES inputs and returns a DataFrame with FLiES outputs.
     
@@ -124,7 +127,8 @@ def process_FLiESANN_table(
         NDVI=get_column_or_none(input_df, "NDVI"),
         GEOS5FP_connection=GEOS5FP_connection,
         NASADEM_connection=NASADEM_connection,
-        offline_mode=offline_mode
+        offline_mode=offline_mode,
+        model_filename=model_filename
     )
 
     # Add results to the output DataFrame
